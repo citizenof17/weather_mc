@@ -32,6 +32,7 @@ time_t system_start_time;
 time_t last_weather_update = 0;
 JSONVar weather;
 
+unsigned int i = 1;
 bool initialized = false;
 
 void setup() {
@@ -93,7 +94,6 @@ void initial_info() {
     drawer.clearDisplay();
 }
 
-unsigned int i = 1;
 void loop() {
     drawer.home();
 
