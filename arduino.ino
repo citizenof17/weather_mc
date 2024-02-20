@@ -33,6 +33,7 @@ time_t last_weather_update = 0;
 JSONVar weather;
 
 bool initialized = false;
+unsigned int i = 1;
 
 void setup() {
     Serial.begin(115200);
@@ -93,7 +94,6 @@ void initial_info() {
     drawer.clearDisplay();
 }
 
-unsigned int i = 1;
 void loop() {
     drawer.home();
 
