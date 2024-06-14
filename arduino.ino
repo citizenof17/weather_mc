@@ -79,12 +79,17 @@ int get_time_json(JSONVar &response) {
     return get_json(TIME_API_PATH, response);
 }
 
+bool has_connection(){
+    return WiFi.status() == WL_CONNECTED;
+}
+
 void initial_info() {
     String result = "";
-    if (WiFi.status() == WL_CONNECTED) {
+    if (has_connection()) {
         print_line(drawer, "Connected to WiFi");
         print_line(drawer, WiFi.localIP().toString());
-    } else {
+    }
+    else{
         print_line(drawer, "WiFi not connected");
     }
 
@@ -214,6 +219,7 @@ int parse_and_print() {
             }
         }
     } else {
+        print_line(drawer, "WiFi not connected");
         Serial.println("WiFi Disconnected");
     }
     return 0;

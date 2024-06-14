@@ -3,5 +3,5 @@
     "board": "esp8266:esp8266:nodemcuv2",
     "port": "COM3",
     "sketch": "arduino.ino",
-    "output" : "C:/Users/Pavel/Desktop/alle/code/arduino_output"
+    "output" : "C:/Users/Pavel/Desktop/alles/code/arduino_output"
 }
