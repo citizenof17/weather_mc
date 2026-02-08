@@ -33,9 +33,7 @@ std::vector<float> get_floats_from_json(JSONVar array)
     return res;
 }
 
-int get_json(String url, JSONVar &json)
-{
-    WiFiClient client;
+int _get_json(String url, JSONVar &json, WiFiClient &client){
     HTTPClient http;
 
     http.begin(client, url);
@@ -67,4 +65,18 @@ int get_json(String url, JSONVar &json)
         return 1;
     }
     return 0;
+}
+
+int get_json(String url, JSONVar &json)
+{
+    WiFiClient client;
+    return _get_json(url, json, client);
+}
+
+int get_json_https(String url, JSONVar &json)
+{
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    return _get_json(url, json, client);
 }

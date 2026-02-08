@@ -15,24 +15,35 @@
 #include "api_helpers.h"
 #include "creds.h"
 #include "mydrawings.h"
+#include "utils.h"
 
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C drawer(U8G2_R0, 14, 12, U8X8_PIN_NONE);
 
+// NOTE: Some parameters must be provided via creds.h
 String WEATHER_API_PATH = "http://api.open-meteo.com/v1/forecast?latitude=" latitude "&longitude=" longtitude "&hourly=temperature_2m,precipitation&timezone=Europe\%2FAmsterdam&forecast_days=3";
+String BUSSES_API_PATH = "https://v0.ovapi.nl/tpc/" bustpc;
 String TIME_API_PATH = "http://worldtimeapi.org/api/timezone/Europe/Amsterdam";
+// String TIME_API_PATH = "https://timeapi.io/api/time/current/coordinate?latitude=" latitude "&longitude=" longtitude;
 
 float EPS = 1e-6;
+int INF = 1e9;
 
-unsigned long timer_delay = 30000;  // 60 secs
-unsigned int weather_delay = 30 * 60000; // 30 minutes 
+// unsigned long TIMER_DELAY = 60000;  // 60 secs
+unsigned long TIMER_DELAY = 30000;  // 30 secs
+unsigned int WEATHER_API_DELAY = 30 * 60; // 30 minutes 
+unsigned int BUS_API_DELAY = 1 * 59; // almost 1 minute
+unsigned int BUSSES_TO_SHOW = 3;
 
-String starting_time;
+// String starting_time = "2020-01-01T00:00:00.0+02:00";
+String starting_time = "";
 String current_time;
+String current_temperature;
+String current_rain;
 time_t system_start_time;
-time_t last_weather_update = 0;
-JSONVar weather;
+time_t last_weather_update = -INF;
+time_t last_bus_update = -INF;
 
-unsigned int i = 1;
+unsigned int heartbeat_counter = 1;
 bool initialized = false;
 
 void setup() {
@@ -41,10 +52,12 @@ void setup() {
     drawer.begin();
     drawer.setFont(u8g2_font_7x14B_mf);
     connect_wifi();
+    Serial.println("Wait before starting time;");
+    delay(3000);
     set_starting_time();
     Serial.print("Starting time: ");
     Serial.println(starting_time);
-    Serial.println("Timer set to " + String(timer_delay / 1000) + " seconds");
+    Serial.println("Timer set to " + String(TIMER_DELAY / 1000) + " seconds");
 }
 
 void connect_wifi() {
@@ -53,7 +66,12 @@ void connect_wifi() {
     int retries = 100;
     while (WiFi.status() != WL_CONNECTED and retries > 0) {
         delay(500);
+        drawer.home();
+        drawer.clearDisplay();
         Serial.print(".");
+        print_line(drawer, "Connecting to Wifi");
+        print_line(drawer, "Retries left: " + String(retries));
+        drawer.sendBuffer();
         retries--;
     }
 
@@ -62,13 +80,27 @@ void connect_wifi() {
 }
 
 int set_starting_time() {
+    Serial.println("Setting starting time");
     JSONVar response;
-    if (get_time_json(response)) {
+    int retries = 30;
+    int response_failure = 1;
+    while (retries && (response_failure = get_time_json(response))) {
+        retries -= 1;
+        delay(3000);
+        print_line(drawer, "get_time_json " + String(retries));
+        // Serial.println("Printed to serail amout: " + String(response.printTo(Serial)));
+    }
+    if (response_failure) {
         return 1;
     }
     starting_time = (String)response["datetime"];
     time(&system_start_time);
+    Serial.println("Starting time set " + starting_time);
     return 0;
+}
+
+int get_busses_json(JSONVar &response) {
+    return get_json_https(BUSSES_API_PATH, response);
 }
 
 int get_weather_json(JSONVar &response) {
@@ -88,6 +120,7 @@ void initial_info() {
     if (has_connection()) {
         print_line(drawer, "Connected to WiFi");
         print_line(drawer, WiFi.localIP().toString());
+        update_system_time();
     }
     else{
         print_line(drawer, "WiFi not connected");
@@ -99,28 +132,29 @@ void initial_info() {
     drawer.clearDisplay();
 }
 
-void loop() {
-    drawer.home();
-
-    if (!initialized) {
-        initial_info();
-        return;
-    }
-
-    parse_and_print();
-    heartbeat_to_serial();
-    drawer.sendBuffer();
-
-    Serial.println("Delay...");
-    delay(timer_delay);
-}
-
 void heartbeat_to_serial() {
-    Serial.println(i);
-    i++;
+    Serial.println("HeartBeat " + String(heartbeat_counter));
+    heartbeat_counter++;
 }
 
-String get_current_time() {
+void update_system_time(){
+    time_t now;
+    time(&now);
+    Serial.println("Updating system time" + String(now));
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+    time(&now);
+    while (now < 100000) {
+        Serial.println(String(now));
+        delay(500);
+        time(&now);
+    }
+    time(&system_start_time);
+    Serial.println("System time after update: " + String(system_start_time));
+}
+
+// TODO: get rid of this and reuse `update_system_time`
+void update_current_time() {
     time_t system_current_time;
     time(&system_current_time);
     int seconds = difftime(system_current_time, system_start_time);
@@ -132,25 +166,13 @@ String get_current_time() {
     // Normalization
     mktime(&t);
 
-    char buf[sizeof "1970-01-01T00:00"];
-    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M", &t);
-    return String(buf);
+    char buf[sizeof "1970-01-01T00:00:00"];
+    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", &t);
+    current_time = String(buf);
 }
 
 int upper_bound_time(String start_time, std::vector<String> &times) {
     return std::upper_bound(times.begin(), times.end(), start_time) - times.begin();
-}
-
-String to_humanreadable(String time_in_iso8601) {
-    // "2023-10-08T20:15:21.479523+02:00"
-    // "2023-10-08T00:00"
-    tm t;
-    // strptime(time_in_iso8601.c_str(), "%Y-%m-%dT%H:%M", &t);
-    strptime(time_in_iso8601.c_str(), "%Y-%m-%dT%T", &t);
-
-    char buf[sizeof "07:07"];
-    strftime(buf, sizeof buf, "%H:%M", &t);
-    return String(buf);
 }
 
 int find_next(int start, std::vector<float> &rains, bool is_raining) {
@@ -163,64 +185,164 @@ int find_next(int start, std::vector<float> &rains, bool is_raining) {
     return -1;
 }
 
-int update_weather_if_needed() {
-    time_t now;
-    time(&now);
+int update_weather_info(bool fetch_required){
+    Serial.println("Update weather");
 
-    bool update_required = false;
-    if (last_weather_update == 0) {
-        update_required = true;
-    }
-    else {
-        int seconds = difftime(now, last_weather_update);
-        update_required = seconds >= weather_delay;
-    }
-
-    if (update_required) {
-        Serial.println("Weather updated");
+    JSONVar weather;
+    if (fetch_required){
+        int rc = get_weather_json(weather);
+        if (rc != 0){ return rc; }
         time(&last_weather_update);
-        return get_weather_json(weather);
+
+        // E.g. weather API returned times [7:00, 7:01, 7:02, ...] and current_time 
+        // is 7:00:35. So we should do these calculations
+        std::vector<String> times = get_strings_from_json(weather["hourly"]["time"]);
+        int next_time_point = upper_bound_time(current_time, times);
+        int cur_time_point = next_time_point > 0 ? next_time_point - 1 
+                                : next_time_point;
+        
+        update_temperature(cur_time_point, weather);
+        update_rains_info(cur_time_point, next_time_point, times, weather);
+    }
+
+
+    // char(176) is a degree symbol °
+    print_line(drawer, "Now: " + to_humanreadable(current_time) + " " + 
+               current_temperature + String(char(176)) + "C");
+    print_line(drawer, current_rain);
+    return 0;
+}
+
+void update_rains_info(int cur_time_point, int next_time_point, 
+                       std::vector<String> &times, JSONVar &weather){
+    std::vector<float> rains = get_floats_from_json(weather["hourly"]["precipitation"]);
+        
+    bool is_raining = rains[cur_time_point] > 0;
+    next_time_point = find_next(next_time_point, rains, is_raining);
+
+    if (is_raining) {
+        if (next_time_point == -1) {
+            current_rain = "Rain forever";
+        } else {
+            current_rain = "Rain stops: " + to_humanreadable(times[next_time_point]);
+        }
+    } else {
+        if (next_time_point == -1 || next_time_point - cur_time_point > 24) {
+            current_rain = "No rains today";
+        } else {
+            current_rain = "Starts: " + to_humanreadable(times[next_time_point]);
+            tm cur_time = convert_iso8601_to_tm(times[cur_time_point]);
+            tm rain_time = convert_iso8601_to_tm(times[next_time_point]);
+            if (cur_time.tm_hour > rain_time.tm_hour) {
+                current_rain += " tmrw";
+            }
+        }
+    }
+}
+
+int check_correct_bus(JSONVar &busses){
+    return String(busses[bustpc]["Stop"]["TimingPointName"]) == busstop_name;
+}
+
+int update_busses_info(bool fetch_required){
+    Serial.println("Update busses");
+
+    JSONVar busses;
+    // TODO:
+    // To save memory, `fetch_required` must be used like in `update_weather_info`
+    int rc = get_busses_json(busses);
+    if (rc != 0){ return rc; }
+
+    time(&last_bus_update);
+
+    if (!check_correct_bus(busses)){
+        return 505;
+    }
+
+    JSONVar passes = busses[bustpc]["Passes"];
+    JSONVar keys = passes.keys();
+
+    std::vector<String> arrival_times;
+
+    for (int i = 0; i < keys.length(); i++){
+        JSONVar pass = passes[keys[i]];
+        
+        if (String(pass["DestinationName50"]) == busstop_destination){
+            arrival_times.push_back(String(pass["ExpectedArrivalTime"]));
+        }
+    }
+
+    std::sort(arrival_times.begin(), arrival_times.end());
+
+    int busses_added = 0;
+    tm cur_time = convert_iso8601_to_tm(current_time);
+    time_t cur_time_sec = mktime(&cur_time);
+
+    for (int i = 0; i < arrival_times.size() && busses_added <= BUSSES_TO_SHOW; i++){
+        tm bus_time = convert_iso8601_to_tm(arrival_times[i]);
+        time_t bus_time_sec = mktime(&bus_time);
+
+        int diff_in_secs = bus_time_sec - cur_time_sec;
+        if (diff_in_secs < 0){
+            Serial.println("Some issue with bus times");
+            Serial.println("arrival_times[i] " + String(arrival_times[i]));
+            Serial.println("bus_time_sec " + String(bus_time_sec));
+            Serial.println("cur_time_sec " + String(cur_time_sec));
+            continue;
+        }
+        int diff_in_mins = diff_in_secs / 60;
+        print_line(drawer, "3 bus in: " + String(diff_in_mins) + "min");
+        busses_added++;
     }
     return 0;
 }
 
+int refresh_data_if_needed() {
+    time_t now;
+    time(&now);
+
+    update_current_time();
+    
+    bool weather_data_update_required = difftime(now, last_weather_update) >= WEATHER_API_DELAY;
+    bool bus_data_update_required = difftime(now, last_bus_update) >= BUS_API_DELAY;
+
+    int weather_response_code = 0;
+    int bus_response_code = 0;
+    weather_response_code = update_weather_info(weather_data_update_required);
+    bus_response_code = update_busses_info(bus_data_update_required);
+    return weather_response_code || bus_response_code;
+}
+
+String update_temperature(int cur_time_point, JSONVar &weather){
+    std::vector<float> temps = get_floats_from_json(
+        weather["hourly"]["temperature_2m"]);
+    current_temperature = String(int(temps[cur_time_point]));
+    return current_temperature;
+}
+
 int parse_and_print() {
-    // Send an HTTP GET request
-    // Check WiFi connection status
     if (WiFi.status() == WL_CONNECTED) {
-        if (update_weather_if_needed()) {
-            return 1;
-        }
-
-        std::vector<String> times = get_strings_from_json(weather["hourly"]["time"]);
-        std::vector<float> temps = get_floats_from_json(weather["hourly"]["temperature_2m"]);
-        std::vector<float> rains = get_floats_from_json(weather["hourly"]["precipitation"]);
-
-        String current_time = get_current_time();
-        int next_time_point = upper_bound_time(current_time, times);
-        int cur_time_point = next_time_point > 0 ? next_time_point - 1 : next_time_point;
-        print_line(drawer, "Time: " + to_humanreadable(current_time));
-        print_line(drawer, "Temperature: " + String(temps[cur_time_point]));
-
-        bool is_raining = rains[cur_time_point] > 0;
-        next_time_point = find_next(next_time_point, rains, is_raining);
-
-        if (is_raining) {
-            if (next_time_point == -1) {
-                print_line(drawer, "Rain forever");
-            } else {
-                print_line(drawer, "Rain stops: " + to_humanreadable(times[next_time_point]));
-            }
-        } else {
-            if (next_time_point == -1 || next_time_point - cur_time_point > 24) {
-                print_line(drawer, "No rains today");
-            } else {
-                print_line(drawer, "Rain starts: " + to_humanreadable(times[next_time_point]));
-            }
-        }
+        return refresh_data_if_needed();
     } else {
         print_line(drawer, "WiFi not connected");
         Serial.println("WiFi Disconnected");
     }
     return 0;
+}
+
+void loop() {
+    drawer.home();
+
+    if (!initialized) {
+        initial_info();
+        return;
+    }
+
+    parse_and_print();
+
+    heartbeat_to_serial();
+    drawer.sendBuffer();
+
+    Serial.println("Delay...");
+    delay(TIMER_DELAY);
 }

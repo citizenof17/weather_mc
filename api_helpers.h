@@ -10,5 +10,6 @@ std::vector<String> get_strings_from_json(JSONVar array);
 std::vector<int> get_ints_from_json(JSONVar array);
 std::vector<float> get_floats_from_json(JSONVar array);
 int get_json(String url, JSONVar &json);
+int get_json_https(String url, JSONVar &json);
 
 #endif
